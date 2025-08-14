@@ -18,22 +18,28 @@ class KVStorage {
 
 public:
     
+    KVStorage(const KVStorage&)            = delete;
+    KVStorage& operator=(const KVStorage&) = delete;
+    KVStorage(KVStorage&&)                 = delete;
+    KVStorage& operator=(KVStorage&&)      = delete;
+
     explicit KVStorage(std::span<std::tuple<std::string /*key*/, std::string /*value*/,
     uint32_t /*ttl*/>> entries, Clock clock = Clock()) {
-        // TODO: implement me
+        hashIndex.reserve(entries.size());
+        for (const auto& [key, value, ttl] : entries) {
+            set(key, value, ttl);
+        }
     }
     
-    ~KVStorage() {
-        // TODO: implement me
-    }
+    ~KVStorage() = default;
 
     void set(std::string key, std::string value, uint32_t ttl) {
         auto lock = writer_lock();
 
         const time_point expire_at = compute_expire_time(ttl);
 
-        if (auto hit = hashIndex.find(std::string_view(key)); hit != hashIndex.end()) {
-            update_value(hit->second, std::move(value), expire_at);
+        if (auto hash_it = hashIndex.find(std::string_view(key)); hash_it != hashIndex.end()) {
+            update_value(hash_it->second, std::move(value), expire_at);
         } else {
             MapIt it = insert_new(std::move(key), std::move(value));
             if (expire_at != time_point::max()) {
@@ -45,36 +51,95 @@ public:
     bool remove(std::string_view key) {
         auto lock = writer_lock();
 
-        auto hit = hashIndex.find(key);
-        if (hit == hashIndex.end()) return false;
+        auto hash_it = hashIndex.find(key);
+        if (hash_it == hashIndex.end()) return false;
 
-        MapIt it = hit->second;
+        MapIt it = hash_it->second;
         Entry& entry = it->second;
         if (entry.expiry_it != expiryIndex.end()) {
             expiryIndex.erase(entry.expiry_it);
         }
-        hashIndex.erase(hit);
+        hashIndex.erase(hash_it);
         sorted.erase(it);
         return true;
     }
 
     std::optional<std::string> get(std::string_view key) const {
-        // TODO: implement me
+
+        reader_gate();
+        while (true) {
+            std::shared_lock<std::shared_mutex> lock(mtx);
+            if (writers_count.load(std::memory_order_acquire) == 0) {
+                auto hash_it = hashIndex.find(key);
+                
+                if (hash_it == hashIndex.end())
+                    return std::nullopt;
+                
+                typename SortedMap::const_iterator const_it = hash_it->second;
+                const Entry& entry = const_it->second;
+                if (is_expired_now(entry))
+                    return std::nullopt;
+                return entry.value;
+            }
+            lock.unlock();
+            reader_gate();
+        }
+
         return std::nullopt;
     }
 
     std::vector<std::pair<std::string, std::string>> getManySorted(std::string_view key,
     uint32_t count) const {
-        // TODO: implement me
-        return {};
+        reader_gate();
+
+        while (true) {
+            std::shared_lock<std::shared_mutex> lock(mtx);
+            if (writers_count.load(std::memory_order_acquire) == 0) {
+                std::vector<std::pair<std::string, std::string>> result;
+                result.reserve(count);
+
+                auto it = sorted.lower_bound(key);
+                for (;it != sorted.end() && result.size() < count; ++it) {
+                    const Entry& entry = it->second;
+                    if (!is_expired_now(entry)) {
+                        result.emplace_back(it->first, entry.value);
+                    }
+                }
+                return result;
+            }
+            lock.unlock();
+            reader_gate();
+        }
     }
 
     std::optional<std::pair<std::string, std::string>> removeOneExpiredEntry() {
-        // TODO: implement me
-        return std::nullopt;
+        auto lock = writer_lock();
+
+        const auto now = Clock::now();
+        auto exp_it = expiryIndex.begin();
+        if (exp_it == expiryIndex.end() || exp_it->first > now) 
+            return std::nullopt;
+        
+        auto hash_it = hashIndex.find(exp_it->second);
+        if (hash_it == hashIndex.end()) {
+            expiryIndex.erase(exp_it);
+            return std::nullopt;
+        }
+
+        MapIt it = hash_it->second;
+        std::string value = std::move(it->second.value);
+        std::string key = std::move(it->first);
+
+        expiryIndex.erase(exp_it);
+        hashIndex.erase(hash_it);
+        sorted.erase(it);
+
+        return std::make_pair(std::move(key), std::move(value));
     }
+
+
+
 private:
-    // TODO: implement me
     using time_point = typename Clock::time_point;
 
     using ExpiryIndex = std::multimap<time_point, std::string_view>;
@@ -101,11 +166,12 @@ private:
     mutable std::atomic_uint32_t writers_count = 0;
 
 
-    bool is_eternal_nolock(const Entry& e) const noexcept {
-        return e.expiry_it == expiryIndex.end();
-    }
-    bool is_expired_now_nolock(const Entry& e) const {
-        if (is_eternal_nolock(e)) return false;
+
+
+private:
+    bool is_expired_now(const Entry& e) const {
+        if (e.expiry_it == expiryIndex.end()) 
+            return false;
         return e.expiry_it->first <= Clock::now();
     }
 

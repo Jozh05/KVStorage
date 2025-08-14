@@ -27,7 +27,7 @@ public:
     uint32_t /*ttl*/>> entries, Clock clock = Clock()) {
         hashIndex.reserve(entries.size());
         for (const auto& [key, value, ttl] : entries) {
-            set(key, value, ttl);
+            set(std::move(key), std::move(value), ttl);
         }
     }
     
@@ -220,9 +220,9 @@ private:
 
     [[nodiscard]]
     std::unique_lock<std::shared_mutex> writer_lock() {
-        writers_count.fetch_add(1, std::memory_order_acq_rel);
+        writers_count.fetch_add(1, std::memory_order_release);
         std::unique_lock<std::shared_mutex> lock(mtx);
-        const auto prev = writers_count.fetch_sub(1, std::memory_order_acq_rel);
+        const auto prev = writers_count.fetch_sub(1, std::memory_order_release);
         if (prev == 1) writers_count.notify_all();
         return lock;
     }

@@ -43,8 +43,19 @@ public:
     }
 
     bool remove(std::string_view key) {
-        // TODO: implement me
-        return false;
+        auto lock = writer_lock();
+
+        auto hit = hashIndex.find(key);
+        if (hit == hashIndex.end()) return false;
+
+        MapIt it = hit->second;
+        Entry& entry = it->second;
+        if (entry.expiry_it != expiryIndex.end()) {
+            expiryIndex.erase(entry.expiry_it);
+        }
+        hashIndex.erase(hit);
+        sorted.erase(it);
+        return true;
     }
 
     std::optional<std::string> get(std::string_view key) const {

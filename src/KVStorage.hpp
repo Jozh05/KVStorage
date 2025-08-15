@@ -26,7 +26,7 @@ public:
     explicit KVStorage(std::span<std::tuple<std::string /*key*/, std::string /*value*/,
     uint32_t /*ttl*/>> entries, Clock clock = Clock()) {
         hashIndex.reserve(entries.size());
-        for (const auto& [key, value, ttl] : entries) {
+        for (auto& [key, value, ttl] : entries) {
             set(std::move(key), std::move(value), ttl);
         }
     }
@@ -167,20 +167,11 @@ private:
 
 
 
-
 private:
     bool is_expired_now(const Entry& e) const {
         if (e.expiry_it == expiryIndex.end()) 
             return false;
         return e.expiry_it->first <= Clock::now();
-    }
-
-    void reader_gate() const {
-        uint32_t cnt = writers_count.load(std::memory_order_acquire);
-        while (cnt != 0) {
-            writers_count.wait(cnt, std::memory_order_acquire);
-            cnt = writers_count.load(std::memory_order_acquire);
-        }
     }
 
     time_point compute_expire_time(uint32_t ttl) const noexcept {
@@ -225,5 +216,13 @@ private:
         const auto prev = writers_count.fetch_sub(1, std::memory_order_release);
         if (prev == 1) writers_count.notify_all();
         return lock;
+    }
+
+    void reader_gate() const {
+        uint32_t cnt = writers_count.load(std::memory_order_acquire);
+        while (cnt != 0) {
+            writers_count.wait(cnt, std::memory_order_acquire);
+            cnt = writers_count.load(std::memory_order_acquire);
+        }
     }
 };

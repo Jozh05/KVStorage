@@ -11,7 +11,8 @@ target_include_directories(kvstorage INTERFACE ${CMAKE_TARGAT_SOURCE_DIR}/src)
 
 find_package(GTest CONFIG REQUIRED)
 
-add_executable(tests tests/KVStorage_test.cpp)
+add_executable(tests tests/kv_basic_test.cpp tests/kv_concurrency_test.cpp
+                tests/kv_sorted_test.cpp tests/kv_ttl_test.cpp)
 target_link_libraries(tests PRIVATE kvstorage GTest::gtest GTest::gtest_main)
 
 include(GoogleTest)

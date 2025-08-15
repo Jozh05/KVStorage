@@ -2,7 +2,6 @@
 #include "kv_test_clock.hpp"
 #include <thread>
 
-// Ожидание начала/остановки потоков без busy-wait
 struct StartStopGate {
     std::atomic<bool> go{false}, stop{false};
     void start() { go.store(true, std::memory_order_release); go.notify_all(); }
@@ -13,7 +12,6 @@ struct StartStopGate {
     }
 };
 
-// Утилита: запуск N читателей «на шум»
 template<class F>
 std::vector<std::thread> spawn_readers(int n, StartStopGate& gate, F&& body) {
     std::vector<std::thread> v; v.reserve(n);
